@@ -1,0 +1,11 @@
+# Generated fixed-CMake build asset.
+assets/cmake-3.20.6-linux-x86_64.tar.gz
+assets/.cmake-*.tmp
+assets/.cmake-*.tar.gz
+
+# Offline Docker image packages.
+imx8p-dev-*-image.tar*
+imx8p-dev-*-image.tgz*
+imx8p-dev-*-image.tzst*
+imx8p-dev-*-image*.sha256
+docker-images/

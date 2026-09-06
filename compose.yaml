@@ -1,0 +1,18 @@
+services:
+  imx8p-dev:
+    # scripts/dev.sh exports these values. Defaults keep manual `docker compose
+    # config` usable, but normal development should enter through dev.sh.
+    image: "${IMX8P_IMAGE:-imx8p-dev:20.04}"
+    environment:
+      HOST_UID: "${HOST_UID:-1000}"
+      HOST_GID: "${HOST_GID:-1000}"
+    volumes:
+      # This is a bind mount: /workspace is the REAL host source directory.
+      # UID/GID matching is therefore required; chmod inside the image cannot
+      # solve ownership of host files.
+      - type: bind
+        source: "${WORKSPACE_DIR:-./workspace}"
+        target: /workspace
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
