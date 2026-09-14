@@ -14,8 +14,202 @@ v5.1 重点解决这些已经实际遇到的问题：
 8. **补充 Ubuntu 24.04 / Docker containerd image store 的磁盘规划说明**。
 9. **UTrack 配置命令统一显式传入 `-DTHRIFT_COMPILER=/usr/bin/thrift`**，不再依赖项目自身的自动发现行为。
 10. **`.dockerignore` 排除 workspace 和离线镜像包**，避免几十 GiB 无关文件进入 BuildKit context。
+11. **GitHub Release 分片分发**：大镜像不进入 Git 历史，通过 Release Assets 上传/下载，使用 SHA256 与 zstd 双重校验后再导入。
 
 > 本项目不修改 Ubuntu APT 软件源，基础镜像仍为 `ubuntu:20.04`。
+
+## 0. 快速开始：从 GitHub Release 下载并导入现成镜像
+
+如果目标只是恢复已经制作好的 `imx8p-dev:20.04`，**优先从 GitHub Release 下载现成镜像，不需要重新执行第 3 节的镜像构建流程**。
+
+当前 v5.1 Release：
+
+- Repository: `wdfk-prog/imx8p-dev-docker`
+- Tag: `imx8p-dev-20.04-v5.1`
+- Release: [i.MX8P Dev Docker 20.04 v5.1](https://github.com/wdfk-prog/imx8p-dev-docker/releases/tag/imx8p-dev-20.04-v5.1)
+
+当前 Release 已发布以下 5 个 Assets：
+
+```text
+imx8p-dev-20.04.tar.zst.part-00
+imx8p-dev-20.04.tar.zst.part-01
+imx8p-dev-20.04.tar.zst.part-02
+imx8p-dev-20.04.tar.zst.part-03
+imx8p-dev-20.04.tar.zst.sha256
+```
+
+镜像被拆分为多个 Release Assets，是因为大镜像不适合进入普通 Git 历史。恢复时需要下载全部分片，然后按顺序合并回完整 `.tar.zst`。
+
+### 0.1 安装下载工具并检查环境
+
+Ubuntu Host 安装 `gh` 和 `zstd`：
+
+```sh
+sudo apt update
+sudo apt install -y gh zstd
+```
+
+确认 Docker、GitHub CLI 和磁盘空间：
+
+```sh
+docker version
+gh --version
+docker system df
+df -h /
+```
+
+如果 `gh` 尚未登录：
+
+```sh
+gh auth login
+```
+
+仓库是公开仓库，也可以直接在浏览器打开 Release 页面手工下载全部 5 个 Assets；命令行恢复推荐使用 `gh release download`。
+
+### 0.2 从 GitHub Release 下载全部镜像分片
+
+进入项目：
+
+```sh
+cd /home/wdfk/share/imx8p-dev-docker
+```
+
+定义当前 Release：
+
+```sh
+REPO=wdfk-prog/imx8p-dev-docker
+RELEASE_TAG=imx8p-dev-20.04-v5.1
+RELEASE_DIR="$PWD/docker-images/$RELEASE_TAG"
+mkdir -p "$RELEASE_DIR"
+```
+
+下载该 Release 的全部 Assets：
+
+```sh
+gh release download "$RELEASE_TAG" \
+    -R "$REPO" \
+    -D "$RELEASE_DIR"
+```
+
+检查：
+
+```sh
+ls -lh "$RELEASE_DIR"
+```
+
+应至少看到：
+
+```text
+imx8p-dev-20.04.tar.zst.part-00
+imx8p-dev-20.04.tar.zst.part-01
+imx8p-dev-20.04.tar.zst.part-02
+imx8p-dev-20.04.tar.zst.part-03
+imx8p-dev-20.04.tar.zst.sha256
+```
+
+如果目录中已有同名 Asset，需要重新下载时可显式覆盖：
+
+```sh
+gh release download "$RELEASE_TAG" \
+    -R "$REPO" \
+    -D "$RELEASE_DIR" \
+    --clobber
+```
+
+### 0.3 合并分片并校验完整镜像
+
+按文件名顺序合并：
+
+```sh
+cat "$RELEASE_DIR"/imx8p-dev-20.04.tar.zst.part-* \
+    > "$RELEASE_DIR"/imx8p-dev-20.04.tar.zst
+```
+
+先校验 SHA256：
+
+```sh
+cd "$RELEASE_DIR"
+sha256sum -c imx8p-dev-20.04.tar.zst.sha256
+```
+
+预期：
+
+```text
+imx8p-dev-20.04.tar.zst: OK
+```
+
+再校验 zstd 数据完整性：
+
+```sh
+zstd -t imx8p-dev-20.04.tar.zst
+```
+
+只有 SHA256 和 zstd 校验都通过后，才继续导入 Docker。
+
+> 合并阶段会同时存在分片和完整 `.tar.zst`，本地磁盘会临时多占约一个完整压缩包的空间。校验通过后，如果不再需要保留分片，可以删除 `part-*` 以回收空间。
+
+### 0.4 导入 Docker 镜像
+
+回到项目目录：
+
+```sh
+cd /home/wdfk/share/imx8p-dev-docker
+```
+
+优先使用项目导入脚本：
+
+```sh
+./scripts/import-image.sh \
+    "$RELEASE_DIR/imx8p-dev-20.04.tar.zst"
+```
+
+脚本会读取同目录的：
+
+```text
+imx8p-dev-20.04.tar.zst.sha256
+```
+
+执行 SHA256 校验、Docker storage 空间检查以及 `docker load`，不会先在 `/tmp` 解出完整 TAR。
+
+如果只有镜像包而没有项目脚本，也可以直接：
+
+```sh
+docker load -i "$RELEASE_DIR/imx8p-dev-20.04.tar.zst"
+```
+
+### 0.5 确认镜像已经可用
+
+```sh
+docker images imx8p-dev
+docker image inspect imx8p-dev:20.04 >/dev/null && \
+    echo 'PASS: imx8p-dev:20.04 is available'
+```
+
+预期至少能够看到：
+
+```text
+imx8p-dev:20.04
+```
+
+导入完成后，可以直接跳到 [第 4 节：进入开发容器](#4-进入开发容器)。
+
+### 0.6 已经有本地 `.tar.zst` 时
+
+如果已经存在完整文件：
+
+```text
+/home/wdfk/share/imx8p-dev-docker/imx8p-dev-20.04.tar.zst
+```
+
+则不需要 GitHub 下载和分片合并，直接执行：
+
+```sh
+cd /home/wdfk/share/imx8p-dev-docker
+zstd -t ./imx8p-dev-20.04.tar.zst
+./scripts/import-image.sh ./imx8p-dev-20.04.tar.zst
+```
+
+如果同目录存在 `imx8p-dev-20.04.tar.zst.sha256`，导入脚本会自动执行 SHA256 校验。
 
 ## 1. 目录和职责
 
@@ -45,6 +239,30 @@ imx8p-dev-docker/
 └── workspace/
     └── .gitkeep
 ```
+
+GitHub Release 中的大镜像属于发布产物，不属于 Git 源码树。仓库现有 `.gitignore` 已忽略 `docker-images/`，因此新的导出、分片和下载文件统一放在该目录下。
+
+当前 v5.1 Release Assets 为：
+
+```text
+imx8p-dev-20.04.tar.zst.part-00
+imx8p-dev-20.04.tar.zst.part-01
+imx8p-dev-20.04.tar.zst.part-02
+imx8p-dev-20.04.tar.zst.part-03
+imx8p-dev-20.04.tar.zst.sha256
+```
+
+本地发布产物建议统一放在：
+
+```text
+docker-images/
+└── <release-tag>/
+    ├── imx8p-dev-20.04.tar.zst
+    ├── imx8p-dev-20.04.tar.zst.sha256
+    └── imx8p-dev-20.04.tar.zst.part-*
+```
+
+`docker-images/` 已被当前仓库 `.gitignore` 忽略，不要把其中的大文件强制 `git add -f` 到仓库。
 
 运行关系：
 
@@ -273,42 +491,211 @@ cmake --build /workspace/build -j4
 [100%] Built target UTrack
 ```
 
-## 6. 离线导出/导入镜像
+## 6. 镜像导出、GitHub Release 上传与导入
 
-### 6.1 导出
+本项目把 Git 仓库和大体积 Docker 镜像分开管理：
 
-默认 gzip：
+```text
+Git repository
+├── Dockerfile / compose.yaml
+├── scripts/
+├── docs/
+└── README.md
+
+GitHub Release Assets
+├── imx8p-dev-20.04.tar.zst.part-00
+├── imx8p-dev-20.04.tar.zst.part-01
+├── imx8p-dev-20.04.tar.zst.part-02
+├── imx8p-dev-20.04.tar.zst.part-03
+└── imx8p-dev-20.04.tar.zst.sha256
+```
+
+不要把完整镜像或 `part-*` 分片提交进 Git 历史。
+
+### 6.1 导出本地镜像
+
+进入项目：
 
 ```sh
-./scripts/export-image.sh /path/to/imx8p-dev-20.04-image.tar.gz
+cd /home/wdfk/share/imx8p-dev-docker
+mkdir -p ./docker-images/imx8p-dev-20.04-v5.1
 ```
 
 大镜像推荐 zstd：
 
 ```sh
-sudo apt install zstd
-./scripts/export-image.sh /path/to/imx8p-dev-20.04-image.tar.zst
+sudo apt install -y zstd
+./scripts/export-image.sh \
+    ./docker-images/imx8p-dev-20.04-v5.1/imx8p-dev-20.04.tar.zst
 ```
 
-脚本会同时生成：
+脚本会生成：
 
 ```text
-<archive>
-<archive>.sha256
+docker-images/imx8p-dev-20.04-v5.1/imx8p-dev-20.04.tar.zst
+docker-images/imx8p-dev-20.04-v5.1/imx8p-dev-20.04.tar.zst.sha256
 ```
 
-当前实现采用流式导出，不再额外创建完整约 27 GiB 临时 TAR。
+当前实现采用流式 `docker save` + zstd，不额外落地完整约 27 GiB 临时 TAR。
 
-### 6.2 导入
+导出完成后建议立即验证：
 
 ```sh
-./scripts/import-image.sh /path/to/imx8p-dev-20.04-image.tar.gz
+cd ./docker-images/imx8p-dev-20.04-v5.1
+sha256sum -c ./imx8p-dev-20.04.tar.zst.sha256
+zstd -t ./imx8p-dev-20.04.tar.zst
 ```
 
-或：
+### 6.2 为 GitHub Release 生成分片
+
+GitHub Release 使用小于 2 GiB 的单个 Asset。当前项目采用 `1900M` 分片，给上限保留余量：
 
 ```sh
-./scripts/import-image.sh /path/to/imx8p-dev-20.04-image.tar.zst
+cd /home/wdfk/share/imx8p-dev-docker/docker-images/imx8p-dev-20.04-v5.1
+rm -f ./imx8p-dev-20.04.tar.zst.part-*
+
+split -b 1900M -d -a 2 \
+    ./imx8p-dev-20.04.tar.zst \
+    ./imx8p-dev-20.04.tar.zst.part-
+```
+
+检查文件：
+
+```sh
+ls -lh ./imx8p-dev-20.04.tar.zst.part-* \
+       ./imx8p-dev-20.04.tar.zst.sha256
+```
+
+当前 v5.1 对应 4 个分片：
+
+```text
+imx8p-dev-20.04.tar.zst.part-00
+imx8p-dev-20.04.tar.zst.part-01
+imx8p-dev-20.04.tar.zst.part-02
+imx8p-dev-20.04.tar.zst.part-03
+```
+
+上传前可以回到仓库根目录检查 Git 状态：
+
+```sh
+cd /home/wdfk/share/imx8p-dev-docker
+git status --short
+```
+
+`docker-images/` 已由当前仓库 `.gitignore` 忽略，因此正常情况下这些 Release Assets 不会出现在待提交列表中。仍然不要使用 `git add -f docker-images/...` 强制把大镜像加入 Git 历史。
+
+### 6.3 首次创建新版本 Release 并上传 Assets
+
+先确认 GitHub CLI：
+
+```sh
+gh --version
+gh auth status
+```
+
+尚未登录时：
+
+```sh
+gh auth login
+```
+
+定义仓库和版本：
+
+```sh
+REPO=wdfk-prog/imx8p-dev-docker
+RELEASE_TAG=imx8p-dev-20.04-v5.1
+```
+
+对于一个**新的版本 tag**，先确保需要发布的源码/文档已经正常提交和 push，然后创建 annotated tag：
+
+```sh
+git status
+git log -1 --oneline
+
+git tag -a "$RELEASE_TAG" \
+    -m "i.MX8P Docker development environment v5.1"
+
+git push origin "$RELEASE_TAG"
+```
+
+> `imx8p-dev-20.04-v5.1` 已经存在时不要重复执行上面的 `git tag`。后续镜像有实质变化时，推荐创建新的版本，例如 `v5.2`，而不是静默覆盖已经发布的 v5.1。
+
+创建 Release，并一次上传所有分片和 SHA256：
+
+```sh
+cd /home/wdfk/share/imx8p-dev-docker
+
+gh release create "$RELEASE_TAG" \
+    ./docker-images/$RELEASE_TAG/imx8p-dev-20.04.tar.zst.part-* \
+    ./docker-images/$RELEASE_TAG/imx8p-dev-20.04.tar.zst.sha256 \
+    -R "$REPO" \
+    --verify-tag \
+    --title "i.MX8P Dev Docker 20.04 v5.1" \
+    --notes "Prebuilt Ubuntu 20.04 i.MX8P development Docker image. Download all part files, concatenate them in order, verify SHA256, then import the image with docker load."
+```
+
+`--verify-tag` 会要求远端 GitHub 上已经存在该 tag，避免 Release 错误绑定到未确认的 revision。
+
+发布完成后检查：
+
+```sh
+gh release view "$RELEASE_TAG" -R "$REPO"
+gh release view "$RELEASE_TAG" -R "$REPO" --web
+```
+
+### 6.4 向已经存在的 Release 补充或替换 Asset
+
+如果 Release 已经存在，只是漏传了一个文件：
+
+```sh
+gh release upload "$RELEASE_TAG" \
+    ./docker-images/$RELEASE_TAG/imx8p-dev-20.04.tar.zst.part-03 \
+    -R "$REPO"
+```
+
+如果同名 Asset 已经存在，普通 `gh release upload` 会拒绝覆盖。只有明确确认远端文件需要被替换时才使用：
+
+```sh
+gh release upload "$RELEASE_TAG" \
+    ./docker-images/$RELEASE_TAG/imx8p-dev-20.04.tar.zst.part-* \
+    ./docker-images/$RELEASE_TAG/imx8p-dev-20.04.tar.zst.sha256 \
+    -R "$REPO" \
+    --clobber
+```
+
+`--clobber` 会先删除同名远端 Asset 再重新上传；上传中途失败时原 Asset 可能已经不存在，因此正常版本迭代优先发布新 tag，而不是覆盖旧 Release。
+
+### 6.5 从 GitHub Release 下载
+
+完整恢复流程见 [第 0 节](#0-快速开始从-github-release-下载并导入现成镜像)。最简下载命令为：
+
+```sh
+gh release download imx8p-dev-20.04-v5.1 \
+    -R wdfk-prog/imx8p-dev-docker \
+    -D ./docker-images/imx8p-dev-20.04-v5.1
+```
+
+然后合并：
+
+```sh
+cat ./docker-images/imx8p-dev-20.04-v5.1/imx8p-dev-20.04.tar.zst.part-* \
+    > ./docker-images/imx8p-dev-20.04-v5.1/imx8p-dev-20.04.tar.zst
+```
+
+校验：
+
+```sh
+cd ./docker-images/imx8p-dev-20.04-v5.1
+sha256sum -c imx8p-dev-20.04.tar.zst.sha256
+zstd -t imx8p-dev-20.04.tar.zst
+```
+
+### 6.6 导入本地镜像包
+
+完整项目目录存在时：
+
+```sh
+./scripts/import-image.sh /path/to/imx8p-dev-20.04.tar.zst
 ```
 
 导入脚本会：
@@ -385,6 +772,13 @@ Docker 存储状态：
 docker info -f '{{ .DriverStatus }}'
 docker system df -v
 df -h /
+```
+
+GitHub Release：
+
+```sh
+gh release view imx8p-dev-20.04-v5.1 -R wdfk-prog/imx8p-dev-docker
+gh release view imx8p-dev-20.04-v5.1 -R wdfk-prog/imx8p-dev-docker --web
 ```
 
 ## 9. 不要再使用这些历史临时修复

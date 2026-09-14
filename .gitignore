@@ -9,3 +9,6 @@ imx8p-dev-*-image.tgz*
 imx8p-dev-*-image.tzst*
 imx8p-dev-*-image*.sha256
 docker-images/
+# Offline Docker image archive
+imx8p-dev-20.04.tar.zst
+imx8p-dev-20.04.tar.zst.part-*
