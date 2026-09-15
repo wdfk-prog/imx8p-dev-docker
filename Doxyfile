@@ -1,0 +1,70 @@
+# -----------------------------------------------------------------------------
+# Doxygen configuration for imx8p-dev-docker
+# -----------------------------------------------------------------------------
+# This repository is primarily a Docker/Shell project.  There is currently no
+# C/C++ application source tree in this repository, so Doxygen is used as a
+# documentation portal for README.md and docs/*.md rather than as an API parser.
+# If C/C++ sources are added later, add their source/include directories to
+# INPUT instead of scanning the whole repository with INPUT = .
+# -----------------------------------------------------------------------------
+
+DOXYFILE_ENCODING      = UTF-8
+PROJECT_NAME           = "i.MX8P Docker Development Environment"
+PROJECT_BRIEF          = "Ubuntu 20.04 + NXP/FSL Yocto SDK development container documentation"
+PROJECT_NUMBER         = master
+
+# Keep generated files outside docs/.  docs/ contains hand-written source
+# documents; build/doxygen contains disposable generated HTML.
+OUTPUT_DIRECTORY       = build/doxygen
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+OUTPUT_LANGUAGE        = English
+
+# The hand-written Markdown documentation is the authoritative input today.
+# README.md is included so Doxygen can index the project overview, while the
+# dedicated main page below provides a short navigation-oriented landing page.
+INPUT                  = README.md \
+                         docs
+FILE_PATTERNS          = *.md
+RECURSIVE              = YES
+
+# Never scan generated output, Git metadata, workflows, or offline image files.
+EXCLUDE                = build \
+                         .git \
+                         .github \
+                         docker-images
+
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 4
+USE_MDFILE_AS_MAINPAGE = docs/doxygen-mainpage.md
+
+# HTML is the only output used by GitHub Pages.
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+GENERATE_TREEVIEW      = YES
+FULL_SIDEBAR           = YES
+HTML_DYNAMIC_MENUS     = YES
+SEARCHENGINE           = YES
+SERVER_BASED_SEARCH    = NO
+
+# No PDF/LaTeX artifact is required for the online documentation site.
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = NO
+
+# Graphviz is kept enabled so future architecture/API pages can use Doxygen
+# graphs without changing the publication workflow.
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+DOT_NUM_THREADS        = 0
+
+# Documentation publication should not fail only because Doxygen emits a
+# warning.  Structural/link checks are handled separately by CI/review.
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_AS_ERROR          = NO

@@ -1,0 +1,86 @@
+name: Doxygen Documentation
+
+# Rebuild the documentation whenever documentation-related files change on the
+# default branch. workflow_dispatch also lets a beginner rerun it from Actions.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - README.md
+      - Doxyfile
+      - "docs/**"
+      - ".github/workflows/pages-doxygen.yml"
+  workflow_dispatch:
+
+# contents:read is enough to checkout the repository.
+# pages:write and id-token:write are required by GitHub's official Pages deploy
+# action and should not be granted to unrelated workflows.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment needs to win.  A newer documentation push can
+# safely replace an older in-progress deployment.
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Doxygen HTML
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+
+      - name: Install Doxygen and Graphviz
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen graphviz
+
+      - name: Prepare generated-output directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/doxygen
+
+      - name: Generate documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          doxygen Doxyfile
+
+          # GitHub Pages does not need Jekyll processing for generated Doxygen
+          # HTML.  .nojekyll also prevents paths beginning with '_' from being
+          # treated specially by Jekyll.
+          touch build/doxygen/html/.nojekyll
+
+          # Fail with a simple message if Doxygen did not create the main page.
+          test -f build/doxygen/html/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: build/doxygen/html
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy documentation
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

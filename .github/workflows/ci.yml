@@ -1,0 +1,80 @@
+name: Lightweight CI
+
+# This workflow intentionally does NOT build the 25 GiB SDK image.  GitHub's
+# hosted runner does not have the local NXP/FSL SDK.  Its job is to catch cheap,
+# deterministic repository errors on every push and pull request.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    name: Shell and Compose checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Check POSIX shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # sh -n only parses the scripts; it does not execute Docker, delete
+          # files, contact devices, or require the NXP SDK.
+          while IFS= read -r -d '' script; do
+            printf 'sh -n %s\n' "$script"
+            sh -n "$script"
+          done < <(find docker scripts -type f -name '*.sh' -print0 | sort -z)
+
+      - name: Run ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Start with error-level findings so existing style/warning debt does
+          # not make the first CI rollout noisy.  The threshold can be tightened
+          # after the repository is clean at warning level.
+          shellcheck --severity=error docker/entrypoint.sh scripts/*.sh
+
+      - name: Validate Release publisher Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/publish-release-image.py
+          python3 scripts/publish-release-image.py --help >/dev/null
+
+      - name: Validate Docker Compose configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # compose.yaml provides safe defaults for these variables, so config
+          # validation does not need a real source tree or running container.
+          docker compose config --quiet
+
+      - name: Explain the CI boundary
+        shell: bash
+        run: |
+          cat <<'EOF_NOTE'
+          Lightweight CI passed.
+          The full image build is intentionally not executed here because it
+          requires the local ~25 GiB NXP/FSL SDK and fixed CMake source asset.
+          Full image verification remains part of the developer-side build gate;
+          the GHCR workflow republishes the already-built GitHub Release image.
+          EOF_NOTE

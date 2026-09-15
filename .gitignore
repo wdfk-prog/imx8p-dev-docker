@@ -12,3 +12,7 @@ docker-images/
 # Offline Docker image archive
 imx8p-dev-20.04.tar.zst
 imx8p-dev-20.04.tar.zst.part-*
+
+
+# Generated Doxygen documentation.
+build/doxygen/

@@ -18,6 +18,122 @@ v5.1 重点解决这些已经实际遇到的问题：
 
 > 本项目不修改 Ubuntu APT 软件源，基础镜像仍为 `ubuntu:20.04`。
 
+
+[![Lightweight CI](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/ci.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/ci.yml)
+[![Doxygen Documentation](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/pages-doxygen.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/pages-doxygen.yml)
+[![GHCR Image](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/publish-image.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/publish-image.yml)
+
+## GitHub CI/CD 与在线文档
+
+本仓库把自动化拆成三个独立边界：源码静态检查、在线文档，以及已经构建完成的 Release 镜像发布。完整镜像构建仍然在拥有 NXP/FSL SDK 的开发机上完成；**GHCR 发布不会重新构建 SDK 镜像**，而是直接复用 GitHub Release 中已经上传的分片镜像。
+
+```text
+push / pull_request to master
+        |
+        +--> GitHub-hosted runner
+        |       |
+        |       +--> sh -n
+        |       +--> ShellCheck
+        |       +--> docker compose config
+        |       +--> Doxygen -> GitHub Pages
+        |
+Published Release / manual existing Release
+        |
+        +--> GitHub-hosted runner
+                |
+                +--> stream split .tar.zst assets
+                +--> verify Release asset SHA-256
+                +--> verify full archive SHA-256
+                +--> stream OCI blobs -> GHCR
+                +--> publish OCI manifest/tag
+```
+
+### 轻量 CI
+
+`.github/workflows/ci.yml` 在 `master` 的 push、pull request 和手工运行时执行。它只做不依赖 SDK 的快速检查，因此适合普通 GitHub-hosted runner：
+
+- POSIX `sh -n` 语法检查；
+- ShellCheck 静态检查；
+- Release-to-GHCR Python 发布器语法/CLI 入口检查；
+- `docker compose config --quiet` 配置检查。
+
+它**不会**声称完整 Docker 镜像或 UTrack 工程已经构建成功。完整镜像验证仍以制作 Release 镜像时 `build-image.sh` 最后执行的 `verify-imx8p-env` 为准。
+
+### Doxygen + GitHub Pages
+
+`Doxyfile` 把 `README.md` 和 `docs/` 作为文档输入，`.github/workflows/pages-doxygen.yml` 负责生成并部署 HTML。
+
+本仓库目前主要是 Docker、Shell 和 Markdown，没有业务 C/C++ 源码，因此这里的 Doxygen 首先承担“在线文档门户”职责，而不是 C/C++ API Reference。以后如果仓库加入 C/C++ 源码，再把对应 `src/` / `include/` 目录加入 `Doxyfile` 的 `INPUT`。
+
+首次使用时，在 GitHub 仓库中设置：
+
+```text
+Settings
+-> Pages
+-> Build and deployment
+-> Source
+-> GitHub Actions
+```
+
+成功部署后，站点地址为：
+
+```text
+https://wdfk-prog.github.io/imx8p-dev-docker/
+```
+
+### GHCR：直接发布已经存在的 Release 镜像
+
+`.github/workflows/publish-image.yml` 不再访问 NXP/FSL SDK，也不再运行 `docker build` / `docker load`。Release Assets 本身就是已经构建好的 `imx8p-dev:20.04` Docker 镜像，因此 GHCR 阶段只负责把**同一份镜像内容**从 Release 搬运到 Container Registry。
+
+工作流支持两种入口：
+
+1. 发布新的正式 GitHub Release 时，通过 `release.published` 自动执行；
+2. 对已经存在的 Release，通过 `Actions -> Publish i.MX8P Release Image to GHCR -> Run workflow` 手工输入 Release Tag 再次执行。
+
+因此，早于工作流创建的 v5.1 可以直接手工发布，不需要创建 v5.2：
+
+```text
+release_tag:    imx8p-dev-20.04-v5.1
+publish_latest: true
+```
+
+成功后发布：
+
+```text
+ghcr.io/wdfk-prog/imx8p-dev-docker:20.04-v5.1
+ghcr.io/wdfk-prog/imx8p-dev-docker:latest
+```
+
+标准 GitHub-hosted `ubuntu-latest` 的磁盘不足以安全执行这个约 27 GiB 镜像的 `docker load`。因此发布器使用 ORAS 直接处理 containerd/Docker 导出的 OCI layout：逐个读取 `blobs/sha256/*` 并流式上传，不在 runner 上落地完整 `.tar.zst`、完整 TAR 或 Docker image store。
+
+在写入最终 GHCR tag 之前，发布器会依次验证：
+
+- GitHub Release API 给出的每个分片 SHA-256；
+- `.tar.zst.sha256` sidecar 自身的 Release Asset SHA-256；
+- 所有分片拼接后的完整 `.tar.zst` SHA-256；
+- OCI `blobs/sha256/*` 的内容摘要和大小；
+- `index.json` 选择出的 image manifest 以及其 config/layer 引用。
+
+只有这些检查全部通过，最后才写入 `20.04-vX.Y` / `latest` manifest tag。中途失败时可能已经存在未引用的内容寻址 blob，但不会把半成品发布成可拉取的正式 tag。
+
+> 当前发布器要求 Release 中的 `docker save` 包包含 OCI layout（`oci-layout`、`index.json`、`blobs/sha256/*`）。如果遇到传统 legacy docker-archive，它会明确失败，而不会退回到占用几十 GiB 磁盘的 `docker load`。
+
+### GHCR 大镜像限制
+
+GHCR 可以保存 Docker/OCI 镜像，但 GitHub 当前明确限制：
+
+- **单个 image layer 最大 10 GB**；
+- **单个 layer 上传最长 10 分钟**。
+
+因此“镜像总计约 27 GB”并不等于一定无法发布。v5.1 的实际 Release 已确认包含一个约 26.4 GB 的**未压缩 OCI layer**，不能原样提交给 GHCR。发布器遇到这种超限且最终被 image manifest 证明为 `application/vnd.oci.image.layer.v1.tar` 的 layer 时，会在 GitHub-hosted runner 上**流式 zstd 重压缩**，只临时落地压缩后的单层文件，然后上传新的内容寻址 blob，并把最终 image manifest 中该 layer 的 `mediaType` / `digest` / `size` 改写为 zstd 版本。
+
+这个转换不会重新构建 SDK，也不会改变容器解压后的文件系统内容；image config 中的 `rootfs.diff_ids` 仍指向原始未压缩 layer digest。发布器会显式校验这一关系后才写最终 GHCR tag。如果重压缩后的单层仍超过 10 GB，或者 Release 中超限 blob 并不是未压缩 OCI tar layer，工作流会 fail-closed，此时下一版镜像才需要从 Dockerfile 层面拆分 SDK。
+
+GitHub 官方说明：
+
+- [Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [Docker image push](https://docs.docker.com/reference/cli/docker/image/push/)
+
 ## 0. 快速开始：从 GitHub Release 下载并导入现成镜像
 
 如果目标只是恢复已经制作好的 `imx8p-dev:20.04`，**优先从 GitHub Release 下载现成镜像，不需要重新执行第 3 节的镜像构建流程**。
@@ -215,7 +331,13 @@ zstd -t ./imx8p-dev-20.04.tar.zst
 
 ```text
 imx8p-dev-docker/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       ├── pages-doxygen.yml
+│       └── publish-image.yml
 ├── Dockerfile
+├── Doxyfile
 ├── compose.yaml
 ├── README.md
 ├── .dockerignore
@@ -225,6 +347,7 @@ imx8p-dev-docker/
 ├── docker/
 │   └── entrypoint.sh
 ├── docs/
+│   ├── doxygen-mainpage.md
 │   ├── offline-image-migration.md
 │   ├── permissions-and-migration.md
 │   └── toolchain-and-thrift.md
@@ -711,6 +834,44 @@ Ubuntu 24.04 / VMware Shared Folder / Docker 29 containerd 磁盘占用详见：
 
 [docs/offline-image-migration.md](docs/offline-image-migration.md)
 
+### 6.7 从 GHCR 拉取在线镜像
+
+当 `Publish i.MX8P Release Image to GHCR` 工作流成功发布后，也可以直接从 GitHub Container Registry 获取镜像，而不需要手工下载和拼接 Release 分片。
+
+版本 Tag 与 GHCR Tag 的映射规则为：
+
+```text
+Release:  imx8p-dev-20.04-v5.1
+GHCR:     ghcr.io/wdfk-prog/imx8p-dev-docker:20.04-v5.1
+also:     ghcr.io/wdfk-prog/imx8p-dev-docker:latest
+```
+
+如果 package 保持 Private，先登录：
+
+```sh
+printf '%s' "$CR_PAT" | docker login ghcr.io -u USERNAME --password-stdin
+```
+
+然后拉取：
+
+```sh
+docker pull ghcr.io/wdfk-prog/imx8p-dev-docker:20.04-v5.1
+```
+
+如果在 GitHub Packages 设置中把 package 改为 Public，公共镜像可匿名拉取。GitHub 第一次发布 Container package 时默认可见性是 Private，因此不要因为仓库本身是 Public 就假设 package 自动公开。
+
+对于这个项目，建议长期保留两条分发路径：
+
+```text
+GHCR
+└── 适合网络条件良好的在线 docker pull
+
+GitHub Release Assets
+└── 适合离线迁移、可分片下载、SHA256 + zstd 双重校验
+```
+
+GHCR 发布器会先把超过 10 GB 的未压缩 OCI layer 流式重压缩为 zstd layer；如果压缩后仍超过限制或单层上传超时，Release Assets 仍然是当前已经验证过的分发方案，不影响开发环境继续使用。
+
 ## 7. Ubuntu 24.04 Host 注意事项
 
 容器仍然是：
@@ -833,3 +994,20 @@ apt-get install thrift-compiler
 镜像级：PASS: i.MX8P Docker development environment is UTrack-ready.
 工程级：[100%] Built target UTrack
 ```
+
+
+GitHub 自动化对应这两个边界：
+
+```text
+GitHub-hosted Lightweight CI
+└── Shell / Compose 静态门禁，不声称完整镜像构建成功
+
+GitHub-hosted GHCR publisher
+└── Release SHA-256 -> OCI blob digest -> GHCR manifest/tag
+    （只搬运已验证的 Release 镜像，不重新 build）
+
+真实 UTrack 工程
+└── 仍由项目级 [100%] Built target UTrack 作为最终工程验收
+```
+
+也就是说，CI/CD 增强了可重复性，但不会把“静态检查通过”“镜像环境通过”和“真实业务工程编译通过”混为一谈。

@@ -1,0 +1,141 @@
+name: Publish i.MX8P Release Image to GHCR
+
+# The Docker image already contains the NXP/FSL SDK and is distributed as split
+# .tar.zst assets in each GitHub Release.  Publishing to GHCR therefore reuses
+# that immutable Release image instead of rebuilding the 25+ GiB SDK image.
+on:
+  release:
+    types:
+      - published
+
+  # Existing Releases (for example v5.1, published before this workflow existed)
+  # can be published or retried without creating a new version.
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing published Release tag to publish to GHCR
+        required: true
+        default: imx8p-dev-20.04-v5.1
+        type: string
+      publish_latest:
+        description: Also move the GHCR latest tag to this image
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: imx8p-ghcr-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Stream Release image to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Release assets are the image source.  Always use the trusted current
+          # publisher implementation from the repository default branch.
+          ref: master
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: 1.3.3
+
+      - name: Install streaming decompressor
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zstd
+          python3 --version
+          zstd --version
+          oras version
+
+      - name: Resolve Release and destination
+        id: meta
+        shell: bash
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          INPUT_LATEST: ${{ inputs.publish_latest }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            release_tag="${EVENT_TAG}"
+            publish_latest=true
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            release_tag="${INPUT_TAG}"
+            publish_latest="${INPUT_LATEST}"
+          else
+            echo "ERROR: unsupported event: ${GITHUB_EVENT_NAME}" >&2
+            exit 1
+          fi
+
+          if [[ ! "${release_tag}" =~ ^imx8p-dev-20\.04-v[0-9]+(\.[0-9]+)+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "ERROR: invalid Release tag: ${release_tag}" >&2
+            exit 1
+          fi
+
+          image_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          {
+            echo "release_tag=${release_tag}"
+            echo "publish_latest=${publish_latest}"
+            echo "image_repository=${image_repository}"
+          } >> "${GITHUB_OUTPUT}"
+
+          printf 'Release tag     : %s\n' "${release_tag}"
+          printf 'Image repository: %s\n' "${image_repository}"
+          printf 'Publish latest  : %s\n' "${publish_latest}"
+
+      - name: Show hosted-runner storage boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          cat <<'EOF'
+          This workflow intentionally does not run docker load.
+          It streams OCI blobs from the split Release archive to GHCR. Oversized
+          uncompressed OCI layers are zstd-recompressed to one temporary file,
+          so the 27+ GiB image is never materialized in the runner's Docker store.
+          EOF
+
+      - name: Log in to GHCR with ORAS
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | \
+            oras login ghcr.io \
+              --username "${GITHUB_ACTOR}" \
+              --password-stdin
+
+      - name: Stream existing Release image to GHCR
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          IMAGE_REPOSITORY: ${{ steps.meta.outputs.image_repository }}
+          PUBLISH_LATEST: ${{ steps.meta.outputs.publish_latest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/publish-release-image.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --release-tag "${RELEASE_TAG}" \
+            --image-repository "${IMAGE_REPOSITORY}" \
+            --publish-latest "${PUBLISH_LATEST}"
+
+      - name: Log out from GHCR
+        if: always()
+        shell: bash
+        run: oras logout ghcr.io || true
