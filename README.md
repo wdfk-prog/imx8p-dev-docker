@@ -20,7 +20,7 @@ v5.1 重点解决这些已经实际遇到的问题：
 
 
 [![Lightweight CI](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/ci.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/ci.yml)
-[![Doxygen Documentation](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/pages-doxygen.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/pages-doxygen.yml)
+[![Documentation](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/pages-doxygen.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/pages-doxygen.yml)
 [![GHCR Image](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/publish-image.yml/badge.svg)](https://github.com/wdfk-prog/imx8p-dev-docker/actions/workflows/publish-image.yml)
 
 ## GitHub CI/CD 与在线文档
@@ -59,11 +59,11 @@ Published Release / manual existing Release
 
 它**不会**声称完整 Docker 镜像或 UTrack 工程已经构建成功。完整镜像验证仍以制作 Release 镜像时 `build-image.sh` 最后执行的 `verify-imx8p-env` 为准。
 
-### Doxygen + GitHub Pages
+### MkDocs + GitHub Pages
 
-`Doxyfile` 把 `README.md` 和 `docs/` 作为文档输入，`.github/workflows/pages-doxygen.yml` 负责生成并部署 HTML。
+`mkdocs.yml` 组织 `docs/` 下的手写文档，`.github/workflows/pages-doxygen.yml` 使用 MkDocs Material 构建 `site/` 并部署到 GitHub Pages。
 
-本仓库目前主要是 Docker、Shell 和 Markdown，没有业务 C/C++ 源码，因此这里的 Doxygen 首先承担“在线文档门户”职责，而不是 C/C++ API Reference。以后如果仓库加入 C/C++ 源码，再把对应 `src/` / `include/` 目录加入 `Doxyfile` 的 `INPUT`。
+本仓库主要是 Docker、Shell 和 Markdown，没有需要单独发布的 C/C++ API Reference，因此 Pages 只使用 MkDocs，不再维护 Doxygen 文档门户。
 
 首次使用时，在 GitHub 仓库中设置：
 
@@ -337,8 +337,9 @@ imx8p-dev-docker/
 │       ├── pages-doxygen.yml
 │       └── publish-image.yml
 ├── Dockerfile
-├── Doxyfile
 ├── compose.yaml
+├── mkdocs.yml
+├── requirements-docs.txt
 ├── README.md
 ├── .dockerignore
 ├── .gitignore
@@ -347,7 +348,7 @@ imx8p-dev-docker/
 ├── docker/
 │   └── entrypoint.sh
 ├── docs/
-│   ├── doxygen-mainpage.md
+│   ├── index.md
 │   ├── offline-image-migration.md
 │   ├── permissions-and-migration.md
 │   └── toolchain-and-thrift.md

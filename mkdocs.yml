@@ -1,0 +1,36 @@
+site_name: i.MX8P Docker Development Environment
+site_description: Ubuntu 20.04 + NXP/FSL Yocto SDK Docker development environment
+site_url: https://wdfk-prog.github.io/imx8p-dev-docker/
+repo_url: https://github.com/wdfk-prog/imx8p-dev-docker
+repo_name: wdfk-prog/imx8p-dev-docker
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+nav:
+  - 首页: index.md
+  - 离线镜像迁移: offline-image-migration.md
+  - 权限与迁移: permissions-and-migration.md
+  - Toolchain 与 Thrift: toolchain-and-thrift.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+plugins:
+  - search
+
+validation:
+  nav:
+    not_found: warn
+  links:
+    not_found: info
+    anchors: info
